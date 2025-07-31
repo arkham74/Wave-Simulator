@@ -7,167 +7,166 @@ using UnityEngine.Experimental.Rendering;
 
 public class WaveSimulator : MonoBehaviour
 {
-    public ComputeShader shader;
+	public ComputeShader shader;
 
-    // Make sure these matche shader.
+	// Make sure these matche shader.
 
-    const int THREAD_COUNT = 16;
-    const int MAX_INPUTS = 32;
+	const int THREAD_COUNT = 8;
+	const int MAX_INPUTS = 32;
 
-    [System.Serializable]
-    public struct Input
-    {
-        public Vector2Int coord;
-        public float radius;
-    }
+	[System.Serializable]
+	public struct Input
+	{
+		public Vector2Int coord;
+		public float radius;
+	}
 
-    int inputCount = 0;
-    Input[] inputs = new Input[MAX_INPUTS];
+	int inputCount = 0;
+	Input[] inputs = new Input[MAX_INPUTS];
 
-    ComputeBuffer inputBuffer;
+	ComputeBuffer inputBuffer;
 
-    [Space]
+	[Space]
 
-    [Range(32, 1024)]
-    public int size = 256;
+	[Range(32, 1024)]
+	public int size = 256;
 
-    [Range(0.0f, 1.0f)]
-    public float decay = 0.1f;
+	[Range(0.0f, 1.0f)]
+	public float decay = 0.1f;
 
-    [Space]
+	[Space]
 
-    [Range(0.0f, 2.0f)]
-    public float speed = 1.0f;
+	[Range(0.0f, 2.0f)]
+	public float speed = 1.0f;
 
-    [Range(1, 32)]
-    public int solverIterations = 1;
+	[Range(1, 32)]
+	public int solverIterations = 1;
 
-    [Space]
+	[Space]
 
-    public bool filteredAdvection;
-    public FilterMode textureFilterMode = FilterMode.Point;
+	public bool filteredAdvection;
+	public FilterMode textureFilterMode = FilterMode.Point;
 
-    // Textures.
+	// Textures.
 
-    RenderTexture heightTexture;
+	RenderTexture heightTexture;
 
-    int kernelCount;
+	int kernelCount;
 
-    int kernel_Clear;
+	int kernel_Clear;
 
-    int kernel_WaveSimulator;
-    int kernel_CalculateNormals;
+	int kernel_WaveSimulator;
+	int kernel_CalculateNormals;
 
-    int dispatchSize;
+	int dispatchSize;
 
-    RenderTexture CreateTexture(GraphicsFormat format)
-    {
-        RenderTexture tex = new(size, size, 0, format)
-        {
-            filterMode = textureFilterMode,
-            wrapMode = TextureWrapMode.Clamp,
+	RenderTexture CreateTexture()
+	{
+		RenderTexture tex = new RenderTexture(size, size, 0, GraphicsFormat.R16G16B16A16_SFloat)
+		{
+			filterMode = textureFilterMode,
+			wrapMode = TextureWrapMode.Clamp,
+			enableRandomWrite = true
+		};
 
-            enableRandomWrite = true
-        };
+		tex.Create();
 
-        tex.Create();
+		return tex;
+	}
 
-        return tex;
-    }
+	void DispatchKernel(int kernel)
+	{
+		shader.Dispatch(kernel, dispatchSize, dispatchSize, 1);
+	}
 
-    void DispatchKernel(int kernel)
-    {
-        shader.Dispatch(kernel, dispatchSize, dispatchSize, 1);
-    }
+	void Start()
+	{
+		heightTexture = CreateTexture();
 
-    void Start()
-    {
-        heightTexture = CreateTexture(GraphicsFormat.R16G16B16A16_SFloat);
+		kernel_Clear = shader.FindKernel("Kernel_Clear"); kernelCount++;
 
-        kernel_Clear = shader.FindKernel("Kernel_Clear"); kernelCount++;
+		kernel_WaveSimulator = shader.FindKernel("Kernel_WaveSimulator"); kernelCount++;
+		kernel_CalculateNormals = shader.FindKernel("Kernel_CalculateNormals"); kernelCount++;
 
-        kernel_WaveSimulator = shader.FindKernel("Kernel_WaveSimulator"); kernelCount++;
-        kernel_CalculateNormals = shader.FindKernel("Kernel_CalculateNormals"); kernelCount++;
+		// Set input buffer.
 
-        // Set input buffer.
+		int inputStructByteSize = Marshal.SizeOf(typeof(Input));
 
-        int inputStructByteSize = Marshal.SizeOf(typeof(Input));
+		inputs = new Input[MAX_INPUTS];
+		inputBuffer = new ComputeBuffer(inputs.Length, inputStructByteSize);
 
-        inputs = new Input[MAX_INPUTS];
-        inputBuffer = new ComputeBuffer(inputs.Length, inputStructByteSize);
+		// Bind textures.
 
-        // Bind textures.
+		for (int kernel = 0; kernel < kernelCount; kernel++)
+		{
+			// Not all kernels read/write into all buffers, but this is easier to manage.
 
-        for (int kernel = 0; kernel < kernelCount; kernel++)
-        {
-            // Not all kernels read/write into all buffers, but this is easier to manage.
+			shader.SetTexture(kernel, "heightTexture", heightTexture);
+			shader.SetBuffer(kernel, "inputs", inputBuffer);
+		}
 
-            shader.SetTexture(kernel, "heightTexture", heightTexture);
-            shader.SetBuffer(kernel, "inputs", inputBuffer);
-        }
+		shader.SetInt("size", size);
+		dispatchSize = Mathf.FloorToInt((float)size / THREAD_COUNT);
 
-        shader.SetInt("size", size);
-        dispatchSize = Mathf.CeilToInt(size / THREAD_COUNT);
+		// Clear.
 
-        // Clear.
+		DispatchKernel(kernel_Clear);
+	}
 
-        DispatchKernel(kernel_Clear);
-    }
+	public void AddInput(Vector2 coord, float radius)
+	{
+		if (inputCount < MAX_INPUTS)
+		{
+			Vector2Int coordInt = new(Mathf.RoundToInt(coord.x), Mathf.RoundToInt(coord.y));
+			inputs[inputCount++] = new Input { coord = coordInt, radius = radius };
+		}
+	}
+	public void AddInput(Vector2Int coord, float radius)
+	{
+		if (inputCount < MAX_INPUTS)
+		{
+			inputs[inputCount++] = new Input { coord = coord, radius = radius };
+		}
+	}
 
-    public void AddInput(Vector2 coord, float radius)
-    {
-        if (inputCount < MAX_INPUTS)
-        {
-            Vector2Int coordInt = new(Mathf.RoundToInt(coord.x), Mathf.RoundToInt(coord.y));
-            inputs[inputCount++] = new Input { coord = coordInt, radius = radius };
-        }
-    }
-    public void AddInput(Vector2Int coord, float radius)
-    {
-        if (inputCount < MAX_INPUTS)
-        {
-            inputs[inputCount++] = new Input { coord = coord, radius = radius };
-        }
-    }
+	void FixedUpdate()
+	{
+		//float deltaTime = Time.deltaTime;
 
-    void FixedUpdate()
-    {
-        //float deltaTime = Time.deltaTime;
+		// Update properties.
 
-        // Update properties.
+		//shader.SetFloat("deltaTime", deltaTime);
 
-        //shader.SetFloat("deltaTime", deltaTime);
+		shader.SetFloat("decay", 1.0f - decay);
+		shader.SetFloat("speed", speed);
 
-        shader.SetFloat("decay", 1.0f - decay);
-        shader.SetFloat("speed", speed);
+		shader.SetInt("inputCount", inputCount);
+		inputBuffer.SetData(inputs, 0, 0, inputCount);
 
-        shader.SetInt("inputCount", inputCount);
-        inputBuffer.SetData(inputs, 0, 0, inputCount);
+		// Propagate.
 
-        // Propagate.
+		for (int i = 0; i < solverIterations; i++)
+		{
+			DispatchKernel(kernel_WaveSimulator);
+		}
 
-        for (int i = 0; i < solverIterations; i++)
-        {
-            DispatchKernel(kernel_WaveSimulator);
-        }
+		// Dispatch.
 
-        // Dispatch.
+		DispatchKernel(kernel_CalculateNormals);
 
-        DispatchKernel(kernel_CalculateNormals);
+		// Reset.
 
-        // Reset.
+		inputCount = 0;
+	}
 
-        inputCount = 0;
-    }
+	//public void SetMouseInput(Vector4 mouse, float radius)
+	//{
+	//    shader.SetVector("iMouse", mouse);
+	//    shader.SetFloat("inputRadius", radius);
+	//}   
 
-    //public void SetMouseInput(Vector4 mouse, float radius)
-    //{
-    //    shader.SetVector("iMouse", mouse);
-    //    shader.SetFloat("inputRadius", radius);
-    //}   
-
-    public RenderTexture GetTexture()
-    {
-        return heightTexture;
-    }
+	public RenderTexture GetTexture()
+	{
+		return heightTexture;
+	}
 }
